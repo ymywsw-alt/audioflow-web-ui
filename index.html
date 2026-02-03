@@ -11,11 +11,15 @@
     p { color:#bbb; }
     .card { background:#141414; border:1px solid #222; border-radius:12px; padding:16px; margin-top:16px; }
     input, select, button { width:100%; padding:12px; margin-top:10px; border-radius:10px; border:1px solid #333; background:#0f0f0f; color:#fff; }
-    button { background:#5b7cff; border:none; font-weight:600; cursor:pointer; }
+    button { background:#5b7cff; border:none; font-weight:700; cursor:pointer; }
     button[disabled]{ opacity:.6; cursor:not-allowed; }
     .row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
     .result { margin-top:14px; }
     a { color:#9db0ff; }
+    .muted { color:#9a9a9a; font-size:13px; margin-top:8px; }
+    .ok { color:#cfd7ff; }
+    .err { color:#ffb4b4; }
+    .pill { display:inline-block; padding:3px 8px; border:1px solid #2a2a2a; border-radius:999px; font-size:12px; color:#cfcfcf; margin-left:6px; }
   </style>
 </head>
 <body>
@@ -33,7 +37,10 @@
         </select>
         <input id="duration" type="number" value="90" min="10" />
       </div>
+
       <button id="run">한 번에 생성</button>
+      <div id="cool" class="muted" style="display:none;">재실행까지 <b id="cooln">10</b>초</div>
+      <div class="muted">안전벨트: 연타/중복 요청 방지(10초 쿨다운)</div>
     </div>
 
     <div id="out" class="card result" style="display:none"></div>
@@ -41,41 +48,119 @@
 
 <script>
 const ENGINE_URL = "https://audioflow-live.onrender.com"; // 엔진 URL 고정
+const COOLDOWN_SEC = 10;
 
 const btn = document.getElementById("run");
 const out = document.getElementById("out");
+const cool = document.getElementById("cool");
+const cooln = document.getElementById("cooln");
+
+let cooldownTimer = null;
+let cooldownLeft = 0;
+
+function setOut(html){
+  out.style.display = "block";
+  out.innerHTML = html;
+}
+
+function startCooldown(){
+  // 버튼은 완료 후 쿨다운 종료까지 비활성화 유지
+  cooldownLeft = COOLDOWN_SEC;
+  cooln.textContent = String(cooldownLeft);
+  cool.style.display = "block";
+
+  if (cooldownTimer) clearInterval(cooldownTimer);
+  cooldownTimer = setInterval(() => {
+    cooldownLeft -= 1;
+    if (cooldownLeft <= 0){
+      clearInterval(cooldownTimer);
+      cooldownTimer = null;
+      cool.style.display = "none";
+      btn.disabled = false;
+      btn.textContent = "한 번에 생성";
+      return;
+    }
+    cooln.textContent = String(cooldownLeft);
+  }, 1000);
+}
+
+function safeText(s){
+  return String(s ?? "").replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+}
 
 btn.onclick = async () => {
+  // 쿨다운 중이면 클릭 무시
+  if (btn.disabled) return;
+
+  const topic = (document.getElementById("topic").value || "").trim();
+  const preset = document.getElementById("preset").value;
+  const duration_sec = Number(document.getElementById("duration").value || 90);
+
+  if (!topic){
+    setOut(`<div class="err"><b>주제를 입력하세요.</b></div>`);
+    return;
+  }
+
   btn.disabled = true;
-  out.style.display = "block";
-  out.innerHTML = "생성 중…";
+  btn.textContent = "생성 중…";
+  cool.style.display = "none";
+
+  setOut(`<div class="muted">생성 중… 잠시만 기다리세요.</div>`);
 
   try {
     const res = await fetch(ENGINE_URL + "/make", {
       method:"POST",
       headers:{ "Content-Type":"application/json" },
-      body: JSON.stringify({
-        topic: document.getElementById("topic").value,
-        preset: document.getElementById("preset").value,
-        duration_sec: Number(document.getElementById("duration").value || 90)
-      })
+      body: JSON.stringify({ topic, preset, duration_sec })
     });
 
-    const j = await res.json();
-    if(!j.ok) throw new Error(j.code);
+    // 레이트리밋/차단
+    if (res.status === 429){
+      setOut(`<div class="err"><b>요청이 많아 잠시 대기해주세요.</b> <span class="pill">약 1분</span></div>`);
+      // 레이트리밋은 재시도 가능하니 쿨다운은 짧게 유지
+      startCooldown();
+      return;
+    }
 
-    out.innerHTML = `
-      <b>${j.data.title}</b><br/>
-      preset: ${j.data.preset}<br/>
-      duration: ${j.data.duration_sec}s<br/><br/>
-      <a href="${ENGINE_URL + j.data.audio.download_url}" target="_blank">
+    // 일반 실패
+    let j = null;
+    try { j = await res.json(); } catch(e) {}
+
+    if (!res.ok || !j || !j.ok){
+      const code = (j && j.code) ? j.code : ("HTTP-" + res.status);
+      setOut(`<div class="err"><b>에러 발생.</b> <span class="pill">${safeText(code)}</span><div class="muted">잠시 후 다시 시도하세요.</div></div>`);
+      // 실패는 즉시 재시도 허용 + 쿨다운은 그래도 안전상 적용
+      startCooldown();
+      return;
+    }
+
+    const title = safeText(j.data?.title || "AudioFlow BGM");
+    const dp = safeText(j.data?.preset || preset);
+    const ds = safeText(j.data?.duration_sec || duration_sec);
+    const path = j.data?.audio?.download_url;
+
+    if (!path){
+      setOut(`<div class="err"><b>다운로드 링크 생성 실패.</b> <span class="pill">E-DL-001</span></div>`);
+      startCooldown();
+      return;
+    }
+
+    setOut(`
+      <div class="ok"><b>${title}</b></div>
+      preset: ${dp}<br/>
+      duration: ${ds}s<br/><br/>
+      <a href="${ENGINE_URL + path}" target="_blank" rel="noopener">
         ▶ 음원 다운로드
       </a>
-    `;
+      <div class="muted">다운로드가 뜨면 정상입니다.</div>
+    `);
+
+    // 성공 후 안전벨트: 10초 쿨다운
+    startCooldown();
+
   } catch(e){
-    out.innerHTML = "에러 발생. 잠시 후 다시 시도하세요.";
-  } finally {
-    btn.disabled = false;
+    setOut(`<div class="err"><b>네트워크 에러.</b> <span class="pill">E-NET-001</span><div class="muted">인터넷/엔진 상태를 확인 후 재시도하세요.</div></div>`);
+    startCooldown();
   }
 };
 </script>
