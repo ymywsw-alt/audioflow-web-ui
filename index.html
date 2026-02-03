@@ -11,7 +11,7 @@
     p { color:#bbb; }
     .card { background:#141414; border:1px solid #222; border-radius:12px; padding:16px; margin-top:16px; }
     input, select, button { width:100%; padding:12px; margin-top:10px; border-radius:10px; border:1px solid #333; background:#0f0f0f; color:#fff; }
-    button { background:#5b7cff; border:none; font-weight:700; cursor:pointer; }
+    button { background:#5b7cff; border:none; font-weight:800; cursor:pointer; }
     button[disabled]{ opacity:.6; cursor:not-allowed; }
     .row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
     .result { margin-top:14px; }
@@ -20,6 +20,8 @@
     .ok { color:#cfd7ff; }
     .err { color:#ffb4b4; }
     .pill { display:inline-block; padding:3px 8px; border:1px solid #2a2a2a; border-radius:999px; font-size:12px; color:#cfcfcf; margin-left:6px; }
+    .hint { margin-top:8px; padding:10px; border-radius:10px; border:1px solid #222; background:#101010; }
+    .hint b { color:#dfe6ff; }
   </style>
 </head>
 <body>
@@ -29,13 +31,30 @@
 
     <div class="card">
       <input id="topic" placeholder="주제 (예: 파크골프 설명 영상)" />
+
       <div class="row">
+        <!-- 프리셋 고정 -->
         <select id="preset">
-          <option value="CALM_LOOP">CALM_LOOP</option>
-          <option value="DOCUMENTARY">DOCUMENTARY</option>
-          <option value="UPBEAT_SHORTS">UPBEAT_SHORTS</option>
+          <option value="CALM_LOOP">CALM_LOOP (설명형/정보형 기본)</option>
+          <option value="DOCUMENTARY">DOCUMENTARY (신뢰/다큐 톤)</option>
+          <option value="UPBEAT_SHORTS">UPBEAT_SHORTS (숏폼/리듬)</option>
         </select>
-        <input id="duration" type="number" value="90" min="10" />
+
+        <!-- 길이 옵션 고정 -->
+        <select id="duration">
+          <option value="60">60s</option>
+          <option value="90" selected>90s</option>
+          <option value="120">120s</option>
+        </select>
+      </div>
+
+      <div class="hint">
+        <div><b>프리셋 선택 규칙(고정)</b></div>
+        <div class="muted">
+          • CALM_LOOP: 대부분의 롱폼 설명 영상 기본<br/>
+          • DOCUMENTARY: 신뢰/차분/정보 전달 강화<br/>
+          • UPBEAT_SHORTS: 숏폼 리듬감/전환용
+        </div>
       </div>
 
       <button id="run">한 번에 생성</button>
@@ -47,8 +66,16 @@
   </div>
 
 <script>
-const ENGINE_URL = "https://audioflow-live.onrender.com"; // 엔진 URL 고정
+const ENGINE_URL = "https://audioflow-live.onrender.com";
 const COOLDOWN_SEC = 10;
+
+const PRESET_META = {
+  CALM_LOOP: { label: "CALM_LOOP", use: "설명형/정보형 기본" },
+  DOCUMENTARY: { label: "DOCUMENTARY", use: "신뢰/다큐 톤" },
+  UPBEAT_SHORTS: { label: "UPBEAT_SHORTS", use: "숏폼/리듬" },
+};
+
+const ALLOWED_DUR = new Set([60, 90, 120]);
 
 const btn = document.getElementById("run");
 const out = document.getElementById("out");
@@ -64,7 +91,6 @@ function setOut(html){
 }
 
 function startCooldown(){
-  // 버튼은 완료 후 쿨다운 종료까지 비활성화 유지
   cooldownLeft = COOLDOWN_SEC;
   cooln.textContent = String(cooldownLeft);
   cool.style.display = "block";
@@ -89,12 +115,14 @@ function safeText(s){
 }
 
 btn.onclick = async () => {
-  // 쿨다운 중이면 클릭 무시
   if (btn.disabled) return;
 
   const topic = (document.getElementById("topic").value || "").trim();
-  const preset = document.getElementById("preset").value;
-  const duration_sec = Number(document.getElementById("duration").value || 90);
+  const presetRaw = document.getElementById("preset").value;
+  const preset = PRESET_META[presetRaw] ? presetRaw : "CALM_LOOP";
+
+  const durRaw = Number(document.getElementById("duration").value || 90);
+  const duration_sec = ALLOWED_DUR.has(durRaw) ? durRaw : 90;
 
   if (!topic){
     setOut(`<div class="err"><b>주제를 입력하세요.</b></div>`);
@@ -104,7 +132,6 @@ btn.onclick = async () => {
   btn.disabled = true;
   btn.textContent = "생성 중…";
   cool.style.display = "none";
-
   setOut(`<div class="muted">생성 중… 잠시만 기다리세요.</div>`);
 
   try {
@@ -114,27 +141,23 @@ btn.onclick = async () => {
       body: JSON.stringify({ topic, preset, duration_sec })
     });
 
-    // 레이트리밋/차단
     if (res.status === 429){
       setOut(`<div class="err"><b>요청이 많아 잠시 대기해주세요.</b> <span class="pill">약 1분</span></div>`);
-      // 레이트리밋은 재시도 가능하니 쿨다운은 짧게 유지
       startCooldown();
       return;
     }
 
-    // 일반 실패
     let j = null;
     try { j = await res.json(); } catch(e) {}
 
     if (!res.ok || !j || !j.ok){
       const code = (j && j.code) ? j.code : ("HTTP-" + res.status);
       setOut(`<div class="err"><b>에러 발생.</b> <span class="pill">${safeText(code)}</span><div class="muted">잠시 후 다시 시도하세요.</div></div>`);
-      // 실패는 즉시 재시도 허용 + 쿨다운은 그래도 안전상 적용
       startCooldown();
       return;
     }
 
-    const title = safeText(j.data?.title || "AudioFlow BGM");
+    const title = safeText(j.data?.title || `AudioFlow BGM`);
     const dp = safeText(j.data?.preset || preset);
     const ds = safeText(j.data?.duration_sec || duration_sec);
     const path = j.data?.audio?.download_url;
@@ -145,17 +168,18 @@ btn.onclick = async () => {
       return;
     }
 
+    const use = PRESET_META[preset]?.use || "";
+
     setOut(`
       <div class="ok"><b>${title}</b></div>
-      preset: ${dp}<br/>
+      preset: ${dp} <span class="pill">${safeText(use)}</span><br/>
       duration: ${ds}s<br/><br/>
       <a href="${ENGINE_URL + path}" target="_blank" rel="noopener">
         ▶ 음원 다운로드
       </a>
-      <div class="muted">다운로드가 뜨면 정상입니다.</div>
+      <div class="muted">길이/프리셋은 고정 옵션만 사용합니다.</div>
     `);
 
-    // 성공 후 안전벨트: 10초 쿨다운
     startCooldown();
 
   } catch(e){
