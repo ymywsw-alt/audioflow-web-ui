@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>AudioFlow</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Arial; background:#0b0b0b; color:#fff; }
+    .wrap { max-width:720px; margin:40px auto; padding:24px; }
+    h1 { margin:0 0 8px; }
+    p { color:#bbb; }
+    .card { background:#141414; border:1px solid #222; border-radius:12px; padding:16px; margin-top:16px; }
+    input, select, button { width:100%; padding:12px; margin-top:10px; border-radius:10px; border:1px solid #333; background:#0f0f0f; color:#fff; }
+    button { background:#5b7cff; border:none; font-weight:600; cursor:pointer; }
+    button[disabled]{ opacity:.6; cursor:not-allowed; }
+    .row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+    .result { margin-top:14px; }
+    a { color:#9db0ff; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>AudioFlow</h1>
+    <p>수익형 영상용 저작권 무리스크 BGM 생성</p>
+
+    <div class="card">
+      <input id="topic" placeholder="주제 (예: 파크골프 설명 영상)" />
+      <div class="row">
+        <select id="preset">
+          <option value="CALM_LOOP">CALM_LOOP</option>
+          <option value="DOCUMENTARY">DOCUMENTARY</option>
+          <option value="UPBEAT_SHORTS">UPBEAT_SHORTS</option>
+        </select>
+        <input id="duration" type="number" value="90" min="10" />
+      </div>
+      <button id="run">한 번에 생성</button>
+    </div>
+
+    <div id="out" class="card result" style="display:none"></div>
+  </div>
+
+<script>
+const ENGINE_URL = "https://audioflow-live.onrender.com"; // 엔진 URL 고정
+
+const btn = document.getElementById("run");
+const out = document.getElementById("out");
+
+btn.onclick = async () => {
+  btn.disabled = true;
+  out.style.display = "block";
+  out.innerHTML = "생성 중…";
+
+  try {
+    const res = await fetch(ENGINE_URL + "/make", {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({
+        topic: document.getElementById("topic").value,
+        preset: document.getElementById("preset").value,
+        duration_sec: Number(document.getElementById("duration").value || 90)
+      })
+    });
+
+    const j = await res.json();
+    if(!j.ok) throw new Error(j.code);
+
+    out.innerHTML = `
+      <b>${j.data.title}</b><br/>
+      preset: ${j.data.preset}<br/>
+      duration: ${j.data.duration_sec}s<br/><br/>
+      <a href="${ENGINE_URL + j.data.audio.download_url}" target="_blank">
+        ▶ 음원 다운로드
+      </a>
+    `;
+  } catch(e){
+    out.innerHTML = "에러 발생. 잠시 후 다시 시도하세요.";
+  } finally {
+    btn.disabled = false;
+  }
+};
+</script>
+</body>
+</html>
